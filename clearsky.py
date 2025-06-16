@@ -7,6 +7,7 @@ import json
 from shapely.geometry import Point, shape, MultiPolygon
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MplPolygon
+import contextily as ctx
 
 API_URL = "https://opensky-network.org/api/states/all"
 JORDAN_GEOJSON_URL = "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/JOR/ADM0/geoBoundaries-JOR-ADM0.geojson"
@@ -18,6 +19,8 @@ BBOX = {
     "lomin": 34.958,  # min longitude
     "lomax": 39.302   # max longitude
 }
+
+INTERVAL = 3  # Minutes between API requests
 
 def get_jordan_polygon():
     """Get Jordan's boundary polygon from geoBoundaries"""
@@ -55,6 +58,11 @@ def draw_polygon_live(ax, polygon, bbox_flights, jordan_flights):
         return
     x, y = polygon.exterior.xy
     ax.plot(x, y, color='blue', linewidth=2)
+    # Add OpenStreetMap basemap
+    try:
+        ctx.add_basemap(ax, crs="epsg:4326", source=ctx.providers.OpenStreetMap.Mapnik)
+    except Exception as e:
+        print(f"Basemap error: {e}")
     # Plot airplanes in the bounding box but outside the polygon in green
     for flight in bbox_flights:
         if flight[5] is not None and flight[6] is not None:
@@ -150,7 +158,7 @@ def main():
         elif len(jordan_flights) == 0:
             print("No airplanes detected over Jordan. Beeping 10 times...")
             beep(10)
-        time.sleep(60)
+        time.sleep(INTERVAL * 60)
 
 if __name__ == "__main__":
     main()
