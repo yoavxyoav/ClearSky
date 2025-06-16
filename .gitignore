@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# PyCharm
+.idea/
+
+# Logs
+*.log
+
+# Matplotlib plots
+*.png
+*.svg
+
+# OS junk
+Thumbs.db
+
+# Environment variables
+.env
+.env.*
+
+# Test output
+htmlcov/
+.coverage
+.tox/
+
+# Misc
+*.bak
+*.swp 
+.DS_Store
