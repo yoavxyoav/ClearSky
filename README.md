@@ -1,3 +1,5 @@
+![Map Example](map.png)
+
 # ClearSky: Jordan Air Traffic Monitor
 
 ClearSky is a Python application that visualizes real-time air traffic over Jordan using the OpenSky Network API and OpenStreetMap basemaps. It fetches live flight data, highlights flights inside and outside Jordan's borders, and provides a beautiful, interactive map with live updates.
