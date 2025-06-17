@@ -5,11 +5,18 @@ import platform
 import os
 import json
 from shapely.geometry import Point, shape, MultiPolygon
+import matplotlib
+matplotlib.use('Qt5Agg')  # Use Qt5Agg backend for better window management
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MplPolygon
 import contextily as ctx
+import numpy as np
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication
+import sys
 
 API_URL = "https://opensky-network.org/api/states/all"
+TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 JORDAN_GEOJSON_URL = "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/JOR/ADM0/geoBoundaries-JOR-ADM0.geojson"
 
 # Bounding box for Jordan (tight fit to polygon)
@@ -20,7 +27,64 @@ BBOX = {
     "lomax": 39.302   # max longitude
 }
 
-INTERVAL = 3  # Minutes between API requests
+# Padding for the bounding box (in degrees)
+PADDING = 1  # 0.5 degrees of padding
+
+# Arrow visualization settings
+ARROW_LENGTH = 0.1    # Length of the arrow in degrees
+ARROW_WIDTH = 0.05    # Width of the arrow head
+ARROW_HEAD_LENGTH = 0.1  # Length of the arrow head
+
+# Apply padding to BBOX
+BBOX = {
+    "lamin": BBOX["lamin"] - PADDING,
+    "lamax": BBOX["lamax"] + PADDING,
+    "lomin": BBOX["lomin"] - PADDING,
+    "lomax": BBOX["lomax"] + PADDING
+}
+
+INTERVAL = 1  # Minutes between API requests
+
+# Load OpenSky OAuth2 credentials
+with open('credentials.json', 'r') as f:
+    creds = json.load(f)
+    OPENSKY_CLIENT_ID = creds['clientId']
+    OPENSKY_CLIENT_SECRET = creds['clientSecret']
+    print(f"[DEBUG] Loaded clientId: {OPENSKY_CLIENT_ID}")
+    print(f"[DEBUG] Loaded clientSecret: {OPENSKY_CLIENT_SECRET}")
+
+def get_oauth2_token():
+    data = {
+        'grant_type': 'client_credentials',
+        'client_id': OPENSKY_CLIENT_ID,
+        'client_secret': OPENSKY_CLIENT_SECRET
+    }
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    print(f"[DEBUG] Token request payload: {data}")
+    try:
+        response = requests.post(TOKEN_URL, data=data, headers=headers)
+        print(f"[DEBUG] Token response status: {response.status_code}")
+        print(f"[DEBUG] Token response content: {response.text}")
+        response.raise_for_status()
+        token_data = response.json()
+        return token_data['access_token'], token_data.get('expires_in', 3600)
+    except Exception as e:
+        print(f"[DEBUG] Exception during token request: {e}")
+        if 'response' in locals():
+            print(f"[DEBUG] Response content: {response.text}")
+        raise
+
+# Token cache
+_token = None
+_token_expiry = 0
+
+def get_token():
+    global _token, _token_expiry
+    if _token is None or time.time() > _token_expiry - 60:
+        print("[AUTH] Fetching new OAuth2 token...")
+        _token, expires_in = get_oauth2_token()
+        _token_expiry = time.time() + expires_in
+    return _token
 
 def get_jordan_polygon():
     """Get Jordan's boundary polygon from geoBoundaries"""
@@ -50,55 +114,110 @@ def is_point_in_jordan(point, polygon):
         return any(poly.contains(point) for poly in polygon.geoms)
     return False
 
-def draw_polygon_live(ax, polygon, bbox_flights, jordan_flights):
+def draw_polygon_live(ax, polygon, bbox_flights, jordan_flights, debug=False):
     """Draw or update the polygon and airplanes for debugging (live plot)"""
     ax.clear()
     if polygon is None:
         ax.set_title('No polygon to draw.')
         return
+        
+    # Draw the polygon
     x, y = polygon.exterior.xy
-    ax.plot(x, y, color='blue', linewidth=2)
+    ax.plot(x, y, color='blue', linewidth=2, label='Jordan Border')
+    
     # Add OpenStreetMap basemap
     try:
         ctx.add_basemap(ax, crs="epsg:4326", source=ctx.providers.OpenStreetMap.Mapnik)
     except Exception as e:
         print(f"Basemap error: {e}")
-    # Plot airplanes in the bounding box but outside the polygon in green
+    
+    # Plot each flight exactly once with its correct color and direction
     for flight in bbox_flights:
-        if flight[5] is not None and flight[6] is not None:
+        if flight[5] is not None and flight[6] is not None:  # lon, lat
             point = Point(flight[5], flight[6])
-            if not is_point_in_jordan(point, polygon):
-                ax.scatter(flight[5], flight[6], color='green', s=50)
-    # Plot airplanes inside the polygon in red
-    for flight in jordan_flights:
-        if flight[5] is not None and flight[6] is not None:
-            ax.scatter(flight[5], flight[6], color='red', s=50)
+            heading = flight[10]  # heading in degrees
+            if heading is not None:
+                # Convert heading to radians for matplotlib
+                heading_rad = np.radians(heading)
+                # Calculate arrow components
+                dx = ARROW_LENGTH * np.sin(heading_rad)
+                dy = ARROW_LENGTH * np.cos(heading_rad)
+                
+                if flight in jordan_flights:
+                    # Inside polygon - red
+                    ax.arrow(flight[5], flight[6], dx, dy, 
+                            head_width=ARROW_WIDTH, head_length=ARROW_HEAD_LENGTH, 
+                            fc='red', ec='black', lw=1.5,
+                            label='Inside Polygon' if 'Inside Polygon' not in ax.get_legend_handles_labels()[1] else "")
+                else:
+                    # Outside polygon - green
+                    ax.arrow(flight[5], flight[6], dx, dy, 
+                            head_width=ARROW_WIDTH, head_length=ARROW_HEAD_LENGTH, 
+                            fc='green', ec='black', lw=1.5,
+                            label='Outside Polygon' if 'Outside Polygon' not in ax.get_legend_handles_labels()[1] else "")
+            else:
+                # If no heading data, plot as a dot
+                if flight in jordan_flights:
+                    ax.scatter(flight[5], flight[6], color='red', s=50, 
+                             label='Inside Polygon' if 'Inside Polygon' not in ax.get_legend_handles_labels()[1] else "")
+                else:
+                    ax.scatter(flight[5], flight[6], color='green', s=50, 
+                             label='Outside Polygon' if 'Outside Polygon' not in ax.get_legend_handles_labels()[1] else "")
+    
     ax.set_title('Jordan Polygon and Airplanes')
     ax.set_xlabel('Longitude')
     ax.set_ylabel('Latitude')
-    ax.set_xlim(34.5, 39.5)
-    ax.set_ylim(28.5, 34.5)
+    # Use the same bounding box as the API call
+    ax.set_xlim(BBOX["lomin"], BBOX["lomax"])
+    ax.set_ylim(BBOX["lamin"], BBOX["lamax"])
+    
+    # Always show legend
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), loc='upper right')
+    
+    # Force redraw
     ax.figure.canvas.draw()
     ax.figure.canvas.flush_events()
 
-def beep(n=1):
+def beep(n=1, sleep=1):
     system = platform.system()
 
     for _ in range(n):
         if system == "Darwin":  # macOS
-            os.system('say "beep"')
+            os.system('afplay /System/Library/Sounds/Blow.aiff')  # Gentle bloop sound
         else:  # Linux or fallback
             print("\a", end='', flush=True)
-        time.sleep(0.5)
+        time.sleep(sleep)
 
 def get_flights(params=None):
     try:
         print(f"[DEBUG] Requesting flights with params: {params}")
-        response = requests.get(API_URL, params=params, timeout=10)
+        token = get_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        response = requests.get(
+            API_URL,
+            params=params,
+            timeout=10,
+            headers=headers
+        )
+        # Always print rate limit info
+        remaining = response.headers.get('x-rate-limit-remaining', 'unknown')
+        print(f"\n[RATE LIMIT] Remaining API calls: {remaining}\n")
         response.raise_for_status()
-        return response.json().get("states", [])
+        data = response.json()
+        # Handle case where states is None or empty
+        if not data or 'states' not in data or not data['states']:
+            print(f"[{datetime.now()}] No flight data available")
+            return []
+        return data['states']
     except requests.exceptions.RequestException as e:
         print(f"[{datetime.now()}] Error fetching flights: {e}")
+        if hasattr(e.response, 'status_code'):
+            print(f"[DEBUG] Status code: {e.response.status_code}")
+            # Try to get rate limit even on error
+            remaining = e.response.headers.get('x-rate-limit-remaining', 'unknown')
+            print(f"\n[RATE LIMIT] Remaining API calls: {remaining}\n")
         return []
     except (ValueError, KeyError) as e:
         print(f"[{datetime.now()}] Error parsing flight data: {e}")
@@ -117,11 +236,24 @@ def main():
         print("Warning: Could not load Jordan's polygon. Falling back to bounding box.")
     else:
         print(f"Jordan polygon type: {jordan_polygon.geom_type}")
+    
+    # Initialize Qt application
+    app = QApplication(sys.argv)
+    
     plt.ion()
-    fig, ax = plt.subplots()
-    while True:
+    # Create a larger figure
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111)
+    # Set window title
+    fig.canvas.manager.set_window_title('Jordan Air Traffic Monitor')
+    
+    def update_flights():
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         bbox_flights = get_flights(BBOX)
+        if bbox_flights is None:
+            print(f"[{now}] Error: Could not fetch flights data")
+            return
+            
         print(f"[{now}] Flights in bounding box: {len(bbox_flights)}")
         print(f"[{now}] Flight Table:")
         print(f"{'Callsign':<10} {'Airline':<10} {'Country':<20} {'Longitude':>10} {'Latitude':>10} {'InsidePolygon':>15}")
@@ -164,7 +296,17 @@ def main():
         elif len(jordan_flights) == 0:
             print("No airplanes detected over Jordan. Beeping 10 times...")
             beep(10)
-        time.sleep(INTERVAL * 60)
+    
+    # Create a timer that calls update_flights every INTERVAL minutes
+    timer = QTimer()
+    timer.timeout.connect(update_flights)
+    timer.start(INTERVAL * 60 * 1000)  # Convert minutes to milliseconds
+    
+    # Run initial update
+    update_flights()
+    
+    # Start the Qt event loop
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
     main()
