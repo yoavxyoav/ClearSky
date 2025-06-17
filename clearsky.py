@@ -129,9 +129,9 @@ def main():
         lats, lons = [], []
         jordan_flights = []
         for flight in bbox_flights:
-            callsign = flight[1].strip() if flight[1] else ''
+            callsign = flight[1].strip() if flight[1] is not None else ''
             airline = callsign[:3] if len(callsign) >= 3 else ''
-            country = flight[2] if flight[2] else ''
+            country = flight[2] if flight[2] is not None else ''
             lon = flight[5]
             lat = flight[6]
             inside = False
