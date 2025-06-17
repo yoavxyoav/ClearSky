@@ -14,6 +14,7 @@ import numpy as np
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 import sys
+import random
 
 API_URL = "https://opensky-network.org/api/states/all"
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
@@ -180,12 +181,37 @@ def draw_polygon_live(ax, polygon, bbox_flights, jordan_flights, debug=False):
     ax.figure.canvas.draw()
     ax.figure.canvas.flush_events()
 
+# Beep sound customization
+BEEP_MODE = "beep"  # Options: "random", "beep", or one of the sample names below
+BEEP_SAMPLES = [
+    "Blow.aiff",
+    "Glass.aiff",
+    "Hero.aiff",
+    "Submarine.aiff",
+    "Funk.aiff",
+    "Ping.aiff",
+    "Pop.aiff"
+]
+BEEP_SAMPLE_PATH = "/System/Library/Sounds/"
+
 def beep(n=1, sleep=1):
     system = platform.system()
-
+    sound = None
+    if system == "Darwin":
+        if BEEP_MODE == "random":
+            sound = random.choice(BEEP_SAMPLES)
+        elif BEEP_MODE in [s.replace('.aiff','') for s in BEEP_SAMPLES]:
+            sound = BEEP_MODE + ".aiff"
     for _ in range(n):
         if system == "Darwin":  # macOS
-            os.system('afplay /System/Library/Sounds/Blow.aiff')  # Gentle bloop sound
+            if BEEP_MODE == "random" and sound:
+                os.system(f'afplay {BEEP_SAMPLE_PATH}{sound}')
+            elif BEEP_MODE == "beep":
+                os.system('say beep')
+            elif sound:
+                os.system(f'afplay {BEEP_SAMPLE_PATH}{sound}')
+            else:
+                os.system(f'afplay {BEEP_SAMPLE_PATH}Blow.aiff')
         else:  # Linux or fallback
             print("\a", end='', flush=True)
         time.sleep(sleep)
