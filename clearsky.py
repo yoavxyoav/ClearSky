@@ -16,6 +16,9 @@ from PyQt5.QtWidgets import QApplication
 import sys
 import random
 
+# Position source mapping (OpenSky API)
+SOURCE_MAP = {0: 'ADS-B', 1: 'ASTERIX', 2: 'MLAT'}
+
 API_URL = "https://opensky-network.org/api/states/all"
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 JORDAN_GEOJSON_URL = "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/JOR/ADM0/geoBoundaries-JOR-ADM0.geojson"
@@ -132,38 +135,61 @@ def draw_polygon_live(ax, polygon, bbox_flights, jordan_flights, debug=False):
     except Exception as e:
         print(f"Basemap error: {e}")
     
+    # Position source mapping
+    print(f"{'Callsign':<10} {'Airline':<10} {'Country':<20} {'Longitude':>10} {'Latitude':>10} {'InsidePolygon':>15} {'Source':>8} {'Age':>6}")
+    print('-' * 100)
+    lats, lons = [], []
+    jordan_flights = []
+    for flight in bbox_flights:
+        callsign = flight[1].strip() if flight[1] is not None else ''
+        airline = callsign[:3] if len(callsign) >= 3 else ''
+        country = flight[2] if flight[2] is not None else ''
+        lon = flight[5]
+        lat = flight[6]
+        last_contact = flight[4]
+        position_source = flight[16] if len(flight) > 16 else None
+        now_ts = datetime.now().timestamp()
+        age = int(now_ts - last_contact) if last_contact else 'N/A'
+        source_name = SOURCE_MAP.get(position_source, str(position_source))
+        inside = False
+        if lon is not None and lat is not None:
+            lats.append(lat)
+            lons.append(lon)
+            point = Point(lon, lat)
+            inside = is_point_in_jordan(point, polygon)
+            status = 'YES' if inside else 'NO'
+            print(f"{callsign:<10} {airline:<10} {country:<20} {lon:10.4f} {lat:10.4f} {status:>15} {source_name:>8} {str(age):>6}")
+            if inside:
+                jordan_flights.append(flight)
+        else:
+            print(f"{callsign:<10} {airline:<10} {country:<20} {'N/A':>10} {'N/A':>10} {'N/A':>15} {'N/A':>8} {'N/A':>6}")
+    if lats and lons:
+        print('-' * 100)
+        print(f"Lat range: {min(lats):.4f} to {max(lats):.4f}")
+        print(f"Lon range: {min(lons):.4f} to {max(lons):.4f}")
+    print(f"[{datetime.now()}] Flights in Jordan polygon: {len(jordan_flights)}")
+    print(f"[{datetime.now()}] 📍 Flights over Jordan (polygon): {len(jordan_flights)}")
+    
     # Plot each flight exactly once with its correct color and direction
     for flight in bbox_flights:
         if flight[5] is not None and flight[6] is not None:  # lon, lat
             point = Point(flight[5], flight[6])
             heading = flight[10]  # heading in degrees
+            if flight in jordan_flights:
+                color = 'red'
+            else:
+                color = 'green'
             if heading is not None:
-                # Convert heading to radians for matplotlib
                 heading_rad = np.radians(heading)
-                # Calculate arrow components
                 dx = ARROW_LENGTH * np.sin(heading_rad)
                 dy = ARROW_LENGTH * np.cos(heading_rad)
-                
-                if flight in jordan_flights:
-                    # Inside polygon - red
-                    ax.arrow(flight[5], flight[6], dx, dy, 
-                            head_width=ARROW_WIDTH, head_length=ARROW_HEAD_LENGTH, 
-                            fc='red', ec='black', lw=1.5,
-                            label='Inside Polygon' if 'Inside Polygon' not in ax.get_legend_handles_labels()[1] else "")
-                else:
-                    # Outside polygon - green
-                    ax.arrow(flight[5], flight[6], dx, dy, 
-                            head_width=ARROW_WIDTH, head_length=ARROW_HEAD_LENGTH, 
-                            fc='green', ec='black', lw=1.5,
-                            label='Outside Polygon' if 'Outside Polygon' not in ax.get_legend_handles_labels()[1] else "")
+                ax.arrow(flight[5], flight[6], dx, dy, 
+                        head_width=ARROW_WIDTH, head_length=ARROW_HEAD_LENGTH, 
+                        fc=color, ec='black', lw=1.5,
+                        label='Inside Polygon' if (flight in jordan_flights and 'Inside Polygon' not in ax.get_legend_handles_labels()[1]) else ('Outside Polygon' if 'Outside Polygon' not in ax.get_legend_handles_labels()[1] else ""))
             else:
-                # If no heading data, plot as a dot
-                if flight in jordan_flights:
-                    ax.scatter(flight[5], flight[6], color='red', s=50, 
-                             label='Inside Polygon' if 'Inside Polygon' not in ax.get_legend_handles_labels()[1] else "")
-                else:
-                    ax.scatter(flight[5], flight[6], color='green', s=50, 
-                             label='Outside Polygon' if 'Outside Polygon' not in ax.get_legend_handles_labels()[1] else "")
+                ax.scatter(flight[5], flight[6], color=color, s=50, 
+                         label='Inside Polygon' if (flight in jordan_flights and 'Inside Polygon' not in ax.get_legend_handles_labels()[1]) else ('Outside Polygon' if 'Outside Polygon' not in ax.get_legend_handles_labels()[1] else ""))
     
     ax.set_title('Jordan Polygon and Airplanes')
     ax.set_xlabel('Longitude')
@@ -282,8 +308,8 @@ def main():
             
         print(f"[{now}] Flights in bounding box: {len(bbox_flights)}")
         print(f"[{now}] Flight Table:")
-        print(f"{'Callsign':<10} {'Airline':<10} {'Country':<20} {'Longitude':>10} {'Latitude':>10} {'InsidePolygon':>15}")
-        print('-' * 80)
+        print(f"{'Callsign':<10} {'Airline':<10} {'Country':<20} {'Longitude':>10} {'Latitude':>10} {'InsidePolygon':>15} {'Source':>8} {'Age':>6}")
+        print('-' * 100)
         lats, lons = [], []
         jordan_flights = []
         for flight in bbox_flights:
@@ -292,6 +318,11 @@ def main():
             country = flight[2] if flight[2] is not None else ''
             lon = flight[5]
             lat = flight[6]
+            last_contact = flight[4]
+            position_source = flight[16] if len(flight) > 16 else None
+            now_ts = datetime.now().timestamp()
+            age = int(now_ts - last_contact) if last_contact else 'N/A'
+            source_name = SOURCE_MAP.get(position_source, str(position_source))
             inside = False
             if lon is not None and lat is not None:
                 lats.append(lat)
@@ -299,13 +330,13 @@ def main():
                 point = Point(lon, lat)
                 inside = is_point_in_jordan(point, jordan_polygon)
                 status = 'YES' if inside else 'NO'
-                print(f"{callsign:<10} {airline:<10} {country:<20} {lon:10.4f} {lat:10.4f} {status:>15}")
+                print(f"{callsign:<10} {airline:<10} {country:<20} {lon:10.4f} {lat:10.4f} {status:>15} {source_name:>8} {str(age):>6}")
                 if inside:
                     jordan_flights.append(flight)
             else:
-                print(f"{callsign:<10} {airline:<10} {country:<20} {'N/A':>10} {'N/A':>10} {'N/A':>15}")
+                print(f"{callsign:<10} {airline:<10} {country:<20} {'N/A':>10} {'N/A':>10} {'N/A':>15} {'N/A':>8} {'N/A':>6}")
         if lats and lons:
-            print('-' * 80)
+            print('-' * 100)
             print(f"Lat range: {min(lats):.4f} to {max(lats):.4f}")
             print(f"Lon range: {min(lons):.4f} to {max(lons):.4f}")
         print(f"[{now}] Flights in Jordan polygon: {len(jordan_flights)}")
