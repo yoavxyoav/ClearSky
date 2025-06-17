@@ -45,3 +45,6 @@ htmlcov/
 *.bak
 *.swp 
 .DS_Store
+
+# Credentials
+credentials.json
