@@ -97,8 +97,14 @@ def get_flights(params=None):
         response = requests.get(API_URL, params=params, timeout=10)
         response.raise_for_status()
         return response.json().get("states", [])
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         print(f"[{datetime.now()}] Error fetching flights: {e}")
+        return []
+    except (ValueError, KeyError) as e:
+        print(f"[{datetime.now()}] Error parsing flight data: {e}")
+        return []
+    except Exception as e:
+        print(f"[{datetime.now()}] Unexpected error: {e}")
         return []
 
 def main():
