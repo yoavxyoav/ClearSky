@@ -54,6 +54,40 @@ python clearsky.py
 - The console will show a table of flights and API rate limit info.
 - Audible beeps indicate the number of flights over Jordan.
 
+## Web Server (Alternative Interface)
+ClearSky also includes a web-based interface that can be accessed from any browser:
+
+### Start the HTTP Server
+```bash
+python clearsky_server.py
+```
+- Server runs on `http://localhost:8080`
+- No additional dependencies required (uses built-in Python HTTP server)
+- Automatically starts background data fetching thread
+
+### Web Interface Features
+- **Interactive Map**: Leaflet-based map with OpenStreetMap tiles
+- **Real-time Updates**: Flight data refreshes every 60 seconds
+- **Sortable Table**: Click column headers to sort flight data
+- **Tooltips**: Hover over airplane markers to see callsigns
+- **Sound Controls**: Mute/unmute and select from 9 different beep sounds
+- **Countdown Timer**: Shows seconds until next refresh
+- **Responsive Design**: Works on desktop and mobile devices
+
+### API Endpoints
+The server provides several REST endpoints:
+- `GET /` - Main web interface (serves `index.html`)
+- `GET /api/flights` - JSON data of all flights with statistics
+- `GET /api/jordan_polygon` - GeoJSON of Jordan's border polygon
+- `GET /api/stats` - Flight statistics only
+- `GET /api/jordan` - Flights over Jordan only
+
+### Web Interface Controls
+- **🔄 Refresh Data**: Manual refresh button
+- **🔊 Mute/🔇 Unmute**: Toggle sound alerts
+- **Sound Dropdown**: Choose from beep, chime, ding, pop, click, ping, tada, error, success, or random
+- **Table Sorting**: Click any column header to sort (▲ ascending, ▼ descending)
+
 ## Customization
 - **Bounding Box & Padding**: Adjust `PADDING` in `clearsky.py` to change the area of interest.
 - **Update Interval**: Change `INTERVAL` (in minutes) for how often data is refreshed.
@@ -63,9 +97,12 @@ python clearsky.py
 
 ## File Structure
 - `clearsky.py` — Main application logic
+- `clearsky_server.py` — HTTP server for web interface
+- `index.html` — Web interface frontend
 - `requirements.txt` — Python dependencies
 - `.gitignore` — Files and folders ignored by git
 - `credentials.json` — Your (private) OpenSky credentials (not tracked by git)
+- `map.png` — Screenshot for README
 
 
 *Created for the one and only Ultimate Boss. All bugs are the user's fault.*
