@@ -32,11 +32,11 @@ BBOX = {
 }
 
 # Padding for the bounding box (in degrees)
-PADDING = 1  # 0.5 degrees of padding
+PADDING = 1  
 
 # Arrow visualization settings
 ARROW_LENGTH = 0.1    # Length of the arrow in degrees
-ARROW_WIDTH = 0.05    # Width of the arrow head
+ARROW_WIDTH = 0.1    # Width of the arrow head
 ARROW_HEAD_LENGTH = 0.1  # Length of the arrow head
 
 # Apply padding to BBOX
