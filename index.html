@@ -142,6 +142,54 @@
                 height: 400px;
             }
         }
+        body.night {
+            background: linear-gradient(135deg, #232946 0%, #121629 100%) !important;
+            color: #eee !important;
+        }
+        body.night .stat-card {
+            background: rgba(30,30,40,0.8) !important;
+            color: #ffd700 !important;
+            border: 1px solid #444 !important;
+        }
+        body.night .stat-number {
+            color: #a259ff !important;
+        }
+        body.night .flights-table {
+            background: rgba(30,30,40,0.8) !important;
+            color: #eee !important;
+            border: 1px solid #444 !important;
+        }
+        body.night table {
+            color: #eee !important;
+        }
+        body.night th {
+            background: #232946 !important;
+            color: #ffd700 !important;
+        }
+        body.night td {
+            color: #eee !important;
+        }
+        body.night .inside-polygon {
+            color: #ff6b6b !important;
+        }
+        body.night .outside-polygon {
+            color: #51cf66 !important;
+        }
+        body.night .refresh-btn {
+            background: #232946 !important;
+            color: #ffd700 !important;
+            border: 1px solid #444 !important;
+        }
+        body.night .refresh-btn:hover {
+            background: #444 !important;
+        }
+        body.night .last-update {
+            color: #aaa !important;
+        }
+        body.night .log-area {
+            background: #181c2f !important;
+            color: #ffd700 !important;
+        }
     </style>
 </head>
 <body>
@@ -166,6 +214,10 @@
             <option value="success">Success</option>
             <option value="random">Random</option>
         </select>
+        <label style="margin-left:18px;font-weight:bold;font-size:1em;vertical-align:middle;">
+            <input type="checkbox" id="bbox-toggle" style="vertical-align:middle;"> Show BBOX
+        </label>
+        <button class="refresh-btn" id="night-mode-btn" style="margin-left:18px;">🌙 Night Mode</button>
         
         <div class="stats-grid">
             <div class="stat-card">
@@ -225,6 +277,25 @@
             updateMuteBtn();
         };
         updateMuteBtn();
+
+        // Ensure AudioContext is unlocked on first user interaction
+        let audioUnlocked = false;
+        function unlockAudio() {
+            if (audioUnlocked) return;
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const o = ctx.createOscillator();
+                o.connect(ctx.destination);
+                o.start(0);
+                o.stop(0);
+                ctx.close();
+                audioUnlocked = true;
+            } catch (e) {}
+        }
+        // Always unlock audio on first data fetch as well
+        window.addEventListener('pointerdown', unlockAudio, { once: true });
+        window.addEventListener('keydown', unlockAudio, { once: true });
+
         function beep(times = 1) {
             if (muted) return;
             let mode = window.BEEP_MODE || 'beep';
@@ -280,11 +351,13 @@
         };
 
         // Initialize map
+        let baseLayer = null;
         const map = L.map('map').setView([31.5, 36.5], 7);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors',
             maxZoom: 19
-        }).addTo(map);
+        });
+        baseLayer.addTo(map);
         // Fetch and draw the real Jordan polygon
         let jordanPolygonLayer = null;
         fetch('/api/jordan_polygon')
@@ -449,7 +522,13 @@
                         marker.bindPopup(popupContent);
                         if (flight.inside_polygon) jordanCount++;
                     });
-                    if (jordanCount > 0) beep(jordanCount);
+                    // Unlock audio context on first data fetch
+                    unlockAudio();
+                    // New beeping logic
+                    if (jordanCount === 0) beep(5);
+                    else if (jordanCount === 1) beep(3);
+                    else if (jordanCount === 2) beep(2);
+                    else if (jordanCount >= 3) beep(1);
                     document.getElementById('last-update').textContent = 
                         'Last update: ' + new Date(data.timestamp).toLocaleString();
                     renderTable();
@@ -472,6 +551,48 @@
         refreshBtn.onclick = function() { 
             updateData(true); 
             startCountdown(); // Reset countdown on manual refresh
+        };
+
+        // BBOX rectangle layer
+        let bboxLayer = null;
+        const bboxToggle = document.getElementById('bbox-toggle');
+        // Hardcoded BBOX (should match backend BBOX)
+        const BBOX = [34.8, 29.1, 39.3, 33.5]; // [minLon, minLat, maxLon, maxLat]
+        function drawBBOX() {
+            if (bboxLayer) map.removeLayer(bboxLayer);
+            const bounds = [[BBOX[1], BBOX[0]], [BBOX[3], BBOX[2]]];
+            bboxLayer = L.rectangle(bounds, {color: '#a259ff', weight: 2, fill: false, dashArray: '6 6'}).addTo(map);
+        }
+        bboxToggle.onchange = function() {
+            if (bboxToggle.checked) drawBBOX();
+            else if (bboxLayer) { map.removeLayer(bboxLayer); bboxLayer = null; }
+        };
+
+        // Night mode logic
+        const nightModeBtn = document.getElementById('night-mode-btn');
+        let nightMode = false;
+        let darkLayer = null;
+        function setNightMode(on) {
+            nightMode = on;
+            document.body.classList.toggle('night', nightMode);
+            // Swap map tile layer
+            if (!darkLayer) {
+                darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '© OpenStreetMap, © CartoDB',
+                    maxZoom: 19
+                });
+            }
+            if (nightMode) {
+                map.removeLayer(baseLayer);
+                darkLayer.addTo(map);
+            } else {
+                map.removeLayer(darkLayer);
+                baseLayer.addTo(map);
+            }
+        }
+        nightModeBtn.onclick = function() {
+            setNightMode(!nightMode);
+            nightModeBtn.textContent = nightMode ? '☀️ Day Mode' : '🌙 Night Mode';
         };
     </script>
 </body>
