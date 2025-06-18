@@ -14,12 +14,15 @@ from urllib.parse import urlparse, parse_qs
 import sys
 import os
 from shapely.geometry import Point
+import traceback
 
 # Import all the existing logic from clearsky.py
 from clearsky import (
     get_oauth2_token, get_token, get_jordan_polygon, is_point_in_jordan,
     get_flights, BBOX, SOURCE_MAP, beep, BEEP_MODE, BEEP_SAMPLES, BEEP_SAMPLE_PATH
 )
+
+print("[LOG] Importing clearsky_server.py and loading credentials...")
 
 # Global state to store current flight data
 current_data = {
@@ -34,20 +37,29 @@ current_data = {
     }
 }
 
+# Track last sent timestamp globally for accurate logging
+last_flights_timestamp_global = None
+
 # Thread lock for data access
 data_lock = threading.Lock()
 
+refresh_count = 0
+
 def update_flight_data():
     """Background thread to continuously update flight data"""
-    global current_data
+    global current_data, refresh_count
     
+    print("[LOG] update_flight_data thread starting...")
     print("[LOG] Starting flight data update thread...")
     jordan_polygon = get_jordan_polygon()
+    print("[LOG] Jordan polygon loaded: {}".format('OK' if jordan_polygon else 'FAILED'))
     
     while True:
         try:
             print(f"[LOG] Data refresh at {datetime.now().isoformat()}")
+            print(f"[LOG] Fetching flights from OpenSky with BBOX: {BBOX}")
             bbox_flights = get_flights(BBOX)
+            print(f"[LOG] get_flights returned: {type(bbox_flights)} with {len(bbox_flights) if bbox_flights else 0} flights")
             if bbox_flights is None:
                 print(f"[ERROR] {datetime.now()} Could not fetch flights data")
                 time.sleep(60)  # Wait 1 minute before retry
@@ -56,7 +68,7 @@ def update_flight_data():
             now = datetime.now()
             lats, lons = [], []
             jordan_flights = []
-            
+            flights_dict = {}  # ICAO24 -> flight_data
             # Process flights
             for flight in bbox_flights:
                 callsign = flight[1].strip() if flight[1] is not None else ''
@@ -69,13 +81,11 @@ def update_flight_data():
                 now_ts = now.timestamp()
                 age = int(now_ts - last_contact) if last_contact else 'N/A'
                 source_name = SOURCE_MAP.get(position_source, str(position_source))
-                
                 if lon is not None and lat is not None:
                     lats.append(lat)
                     lons.append(lon)
                     point = Point(lon, lat)
                     inside = is_point_in_jordan(point, jordan_polygon)
-                    
                     flight_data = {
                         'callsign': callsign,
                         'airline': airline,
@@ -91,34 +101,30 @@ def update_flight_data():
                         'heading': flight[10],
                         'on_ground': flight[8]
                     }
-                    
+                    flights_dict[flight[0]] = flight_data  # Overwrite duplicates
                     if inside:
                         jordan_flights.append(flight_data)
-                    
-                    # Add to all flights
-                    if flight_data not in [f for f in current_data['flights'] if f.get('icao24') == flight_data['icao24']]:
-                        current_data['flights'].append(flight_data)
-            
+            print(f"[LOG] Processed {len(flights_dict)} flights, {len(jordan_flights)} over Jordan")
             # Update global state
             with data_lock:
                 current_data['timestamp'] = now.isoformat()
+                current_data['flights'] = list(flights_dict.values())
                 current_data['jordan_flights'] = jordan_flights
+                refresh_count += 1
                 current_data['stats'] = {
-                    'total_flights': len(bbox_flights),
+                    'total_flights': len(flights_dict),
                     'jordan_flights': len(jordan_flights),
                     'lat_range': (min(lats), max(lats)) if lats else None,
-                    'lon_range': (min(lons), max(lons)) if lons else None
+                    'lon_range': (min(lons), max(lons)) if lons else None,
+                    'refresh_count': refresh_count
                 }
-            
-            print(f"[LOG] Updated state: {len(bbox_flights)} flights in bbox, {len(jordan_flights)} over Jordan")
-            
+            print(f"[LOG] Updated state: {len(flights_dict)} flights in bbox, {len(jordan_flights)} over Jordan")
         except Exception as e:
             print(f"[ERROR] Exception in update thread: {e}")
-        
+            traceback.print_exc()
         time.sleep(60)  # Update every minute
 
 class ClearSkyHTTPHandler(BaseHTTPRequestHandler):
-    last_flights_timestamp = None
     def log_api_access(self, endpoint, extra=None):
         client_ip = self.client_address[0]
         msg = f"[LOG] {datetime.now().isoformat()} - {client_ip} accessed {endpoint}"
@@ -127,22 +133,23 @@ class ClearSkyHTTPHandler(BaseHTTPRequestHandler):
         print(msg)
 
     def do_GET(self):
-        """Handle HTTP GET requests"""
+        global last_flights_timestamp_global
         parsed_url = urlparse(self.path)
         path = parsed_url.path
         # For /api/flights, log update status
         if path == '/api/flights':
             with data_lock:
                 current_ts = current_data['timestamp']
-            updated = (current_ts != self.last_flights_timestamp)
+            updated = (current_ts != last_flights_timestamp_global)
             self.log_api_access(path, f"({'updated' if updated else 'not updated'})")
-            self.last_flights_timestamp = current_ts
+            last_flights_timestamp_global = current_ts
         else:
             self.log_api_access(path)
         
         if path == '/':
             self.send_html_response()
         elif path == '/api/flights':
+            print(f"[LOG] /api/flights requested, returning {len(current_data['flights'])} flights at {current_data['timestamp']}")
             self.send_json_response()
         elif path == '/api/stats':
             self.send_stats_response()
@@ -155,405 +162,15 @@ class ClearSkyHTTPHandler(BaseHTTPRequestHandler):
     
     def send_html_response(self):
         """Send the main HTML page"""
-        html = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ClearSky - Jordan Air Traffic Monitor</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            font-size: 2.5em;
-            margin: 0;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .stat-card {
-            background: rgba(255,255,255,0.1);
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        .stat-number {
-            font-size: 2em;
-            font-weight: bold;
-            color: #ffd700;
-        }
-        .content-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .map-container {
-            background: rgba(255,255,255,0.1);
-            border-radius: 10px;
-            overflow: hidden;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-            height: 500px;
-        }
-        #map {
-            width: 100%;
-            height: 100%;
-            border-radius: 10px;
-        }
-        .flights-table {
-            background: rgba(255,255,255,0.1);
-            border-radius: 10px;
-            overflow: hidden;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-            max-height: 500px;
-            overflow-y: auto;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        th {
-            background: rgba(255,255,255,0.2);
-            font-weight: bold;
-            position: sticky;
-            top: 0;
-        }
-        .inside-polygon {
-            color: #ff6b6b;
-            font-weight: bold;
-        }
-        .outside-polygon {
-            color: #51cf66;
-        }
-        .refresh-btn {
-            background: #ffd700;
-            color: #333;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 1em;
-            margin-bottom: 20px;
-        }
-        .refresh-btn:hover {
-            background: #ffed4e;
-        }
-        .last-update {
-            text-align: center;
-            margin-top: 20px;
-            font-style: italic;
-            opacity: 0.8;
-        }
-        .flight-popup {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            color: #333;
-        }
-        .flight-popup h3 {
-            margin: 0 0 10px 0;
-            color: #667eea;
-        }
-        .flight-popup p {
-            margin: 5px 0;
-        }
-        .flight-popup .inside {
-            color: #ff6b6b;
-            font-weight: bold;
-        }
-        .flight-popup .outside {
-            color: #51cf66;
-        }
-        @media (max-width: 768px) {
-            .content-grid {
-                grid-template-columns: 1fr;
-            }
-            .map-container {
-                height: 400px;
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🛩️ ClearSky</h1>
-            <p>Jordan Air Traffic Monitor - Real-time Flight Tracking</p>
-        </div>
-        
-        <button class="refresh-btn" id="refresh-btn">🔄 Refresh Data</button>
-        <button class="refresh-btn" id="mute-btn">🔊 Mute</button>
-        
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-number" id="total-flights">-</div>
-                <div>Total Flights</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" id="jordan-flights">-</div>
-                <div>Over Jordan</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" id="coverage">-</div>
-                <div>Coverage Area</div>
-            </div>
-        </div>
-        
-        <div class="map-container">
-            <div id="map"></div>
-        </div>
-        
-        <div class="flights-table">
-            <table id="flights-table">
-                <thead>
-                    <tr>
-                        <th data-col="callsign">Callsign</th>
-                        <th data-col="airline">Airline</th>
-                        <th data-col="country">Country</th>
-                        <th data-col="position">Position</th>
-                        <th data-col="altitude">Altitude</th>
-                        <th data-col="speed">Speed</th>
-                        <th data-col="jordan">Jordan</th>
-                        <th data-col="source">Source</th>
-                        <th data-col="age">Age</th>
-                    </tr>
-                </thead>
-                <tbody id="flights-tbody">
-                    <tr><td colspan="8" style="text-align: center;">Loading flight data...</td></tr>
-                </tbody>
-            </table>
-        </div>
-        
-        <div class="last-update" id="last-update">
-            Last update: Never
-        </div>
-        <div class="log-area" id="log-area" style="background:rgba(0,0,0,0.2);color:#fff;padding:10px 20px;margin-top:20px;border-radius:8px;max-height:180px;overflow-y:auto;font-size:0.95em;"></div>
-    </div>
-    
-    <script>
-        // Mute logic for beeps
-        let muted = false;
-        const muteBtn = document.getElementById('mute-btn');
-        function updateMuteBtn() {
-            muteBtn.textContent = muted ? '🔇 Unmute' : '🔊 Mute';
-        }
-        muteBtn.onclick = function() {
-            muted = !muted;
-            updateMuteBtn();
-        };
-        updateMuteBtn();
-        function beep(times = 1) {
-            if (muted) return;
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            let i = 0;
-            function playBeep() {
-                if (i >= times) { ctx.close(); return; }
-                const o = ctx.createOscillator();
-                const g = ctx.createGain();
-                o.type = 'sine';
-                o.frequency.value = 880;
-                g.gain.value = 0.2;
-                o.connect(g).connect(ctx.destination);
-                o.start();
-                setTimeout(() => { o.stop(); i++; setTimeout(playBeep, 120); }, 120);
-            }
-            playBeep();
-        }
-
-        // Initialize map
-        const map = L.map('map').setView([31.5, 36.5], 7);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors',
-            maxZoom: 19
-        }).addTo(map);
-        // Fetch and draw the real Jordan polygon
-        let jordanPolygonLayer = null;
-        fetch('/api/jordan_polygon')
-            .then(response => response.json())
-            .then(geojson => {
-                if (jordanPolygonLayer) map.removeLayer(jordanPolygonLayer);
-                jordanPolygonLayer = L.geoJSON(geojson, {
-                    style: {
-                        color: 'red',
-                        weight: 2,
-                        fillColor: '#ff6b6b',
-                        fillOpacity: 0.1
-                    }
-                }).addTo(map);
-                try { map.fitBounds(jordanPolygonLayer.getBounds()); } catch (e) {}
-            });
-        // Flight markers layer
-        let flightMarkers = L.layerGroup().addTo(map);
-        // Custom airplane icon with heading
-        function createAirplaneIcon(heading, color) {
-            // SVG airplane with rotation
-            const svg = `<svg width="32" height="32" viewBox="0 0 32 32" style="transform:rotate(${heading}deg);">
-                <polygon points="16,2 20,24 16,20 12,24" fill="${color}" stroke="black" stroke-width="1.5"/>
-            </svg>`;
-            return L.divIcon({
-                className: '',
-                html: svg,
-                iconSize: [32, 32],
-                iconAnchor: [16, 16]
-            });
-        }
-        function logEvent(msg) {
-            const logArea = document.getElementById('log-area');
-            const now = new Date();
-            const entry = `<div>[${now.toLocaleTimeString()}] ${msg}</div>`;
-            logArea.innerHTML = entry + logArea.innerHTML;
-        }
-        let lastTimestamp = null;
-        let flightsData = [];
-        let sortCol = null;
-        let sortAsc = true;
-        function renderTable() {
-            const tbody = document.getElementById('flights-tbody');
-            tbody.innerHTML = '';
-            let data = flightsData.slice();
-            if (sortCol) {
-                data.sort((a, b) => {
-                    let va, vb;
-                    if (sortCol === 'position') {
-                        va = (a.latitude || 0) + (a.longitude || 0);
-                        vb = (b.latitude || 0) + (b.longitude || 0);
-                    } else if (sortCol === 'altitude') {
-                        va = a.altitude || 0;
-                        vb = b.altitude || 0;
-                    } else if (sortCol === 'speed') {
-                        va = a.velocity || 0;
-                        vb = b.velocity || 0;
-                    } else if (sortCol === 'age') {
-                        va = a.age === 'N/A' ? 99999 : a.age;
-                        vb = b.age === 'N/A' ? 99999 : b.age;
-                    } else if (sortCol === 'jordan') {
-                        va = a.inside_polygon ? 1 : 0;
-                        vb = b.inside_polygon ? 1 : 0;
-                    } else {
-                        va = (a[sortCol] || '').toString().toLowerCase();
-                        vb = (b[sortCol] || '').toString().toLowerCase();
-                    }
-                    if (va < vb) return sortAsc ? -1 : 1;
-                    if (va > vb) return sortAsc ? 1 : -1;
-                    return 0;
-                });
-            }
-            data.forEach(flight => {
-                const row = document.createElement('tr');
-                row.className = flight.inside_polygon ? 'inside-polygon' : 'outside-polygon';
-                row.innerHTML = `
-                    <td>${flight.callsign || 'N/A'}</td>
-                    <td>${flight.airline || 'N/A'}</td>
-                    <td>${flight.country || 'N/A'}</td>
-                    <td>${flight.latitude?.toFixed(4)}, ${flight.longitude?.toFixed(4)}</td>
-                    <td>${flight.altitude ? Math.round(flight.altitude) + 'm' : 'N/A'}</td>
-                    <td>${flight.velocity ? Math.round(flight.velocity) + 'm/s' : 'N/A'}</td>
-                    <td>${flight.inside_polygon ? '🟢 YES' : '🔴 NO'}</td>
-                    <td>${flight.source || 'N/A'}</td>
-                    <td>${flight.age || 'N/A'}</td>
-                `;
-                tbody.appendChild(row);
-            });
-        }
-        // Add sort indicators and click handlers
-        document.querySelectorAll('#flights-table th').forEach(th => {
-            th.style.cursor = 'pointer';
-            th.onclick = function() {
-                const col = th.getAttribute('data-col');
-                if (sortCol === col) sortAsc = !sortAsc;
-                else { sortCol = col; sortAsc = true; }
-                document.querySelectorAll('#flights-table th').forEach(h => h.textContent = h.textContent.replace(/[▲▼]/g, ''));
-                th.textContent = th.textContent.replace(/[▲▼]/g, '') + (sortAsc ? ' ▲' : ' ▼');
-                renderTable();
-            };
-        });
-        function updateData(force=false) {
-            fetch('/api/flights')
-                .then(response => response.json())
-                .then(data => {
-                    if (!force && data.timestamp === lastTimestamp) return;
-                    lastTimestamp = data.timestamp;
-                    flightsData = data.flights;
-                    document.getElementById('total-flights').textContent = data.stats.total_flights;
-                    document.getElementById('jordan-flights').textContent = data.stats.jordan_flights;
-                    document.getElementById('coverage').textContent = data.stats.total_flights > 0 ? 'Active' : 'No Data';
-                    flightMarkers.clearLayers();
-                    let jordanCount = 0;
-                    data.flights.forEach(flight => {
-                        const markerColor = flight.inside_polygon ? '#ff6b6b' : '#51cf66';
-                        const heading = flight.heading || 0;
-                        const marker = L.marker([flight.latitude, flight.longitude], {
-                            icon: createAirplaneIcon(heading, markerColor)
-                        }).addTo(flightMarkers);
-                        const popupContent = `
-                            <div class="flight-popup">
-                                <h3>${flight.callsign || 'N/A'}</h3>
-                                <p><strong>Airline:</strong> ${flight.airline || 'N/A'}</p>
-                                <p><strong>Country:</strong> ${flight.country || 'N/A'}</p>
-                                <p><strong>Position:</strong> ${flight.latitude?.toFixed(4)}, ${flight.longitude?.toFixed(4)}</p>
-                                <p><strong>Altitude:</strong> ${flight.altitude ? Math.round(flight.altitude) + 'm' : 'N/A'}</p>
-                                <p><strong>Speed:</strong> ${flight.velocity ? Math.round(flight.velocity) + 'm/s' : 'N/A'}</p>
-                                <p><strong>Source:</strong> ${flight.source || 'N/A'}</p>
-                                <p><strong>Age:</strong> ${flight.age || 'N/A'}</p>
-                                <p class="${flight.inside_polygon ? 'inside' : 'outside'}">
-                                    <strong>Over Jordan:</strong> ${flight.inside_polygon ? '🟢 YES' : '🔴 NO'}
-                                </p>
-                            </div>
-                        `;
-                        marker.bindPopup(popupContent);
-                        if (flight.inside_polygon) jordanCount++;
-                    });
-                    if (jordanCount > 0) beep(jordanCount);
-                    document.getElementById('last-update').textContent = 
-                        'Last update: ' + new Date(data.timestamp).toLocaleString();
-                    renderTable();
-                })
-                .catch(error => {
-                    console.error('Error fetching data:', error);
-                    document.getElementById('flights-tbody').innerHTML = 
-                        '<tr><td colspan="8" style="text-align: center; color: #ff6b6b;">Error loading data</td></tr>';
-                });
-        }
-        updateData(true);
-        setInterval(updateData, 60000);
-        const refreshBtn = document.getElementById('refresh-btn');
-        refreshBtn.onclick = function() { updateData(true); };
-    </script>
-</body>
-</html>
-        """
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-        self.wfile.write(html.encode('utf-8'))
+        try:
+            with open('index.html', 'r', encoding='utf-8') as f:
+                html = f.read()
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(html.encode('utf-8'))
+        except Exception as e:
+            self.send_error(500, f"Could not load index.html: {e}")
     
     def send_json_response(self):
         """Send flight data as JSON"""
