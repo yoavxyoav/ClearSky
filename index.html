@@ -190,6 +190,43 @@
             background: #181c2f !important;
             color: #ffd700 !important;
         }
+        .log-area {
+            background: rgba(0,0,0,0.2);
+            color: #fff;
+            padding: 10px 20px;
+            margin-top: 20px;
+            border-radius: 8px;
+            max-height: 180px;
+            overflow-y: auto;
+            font-size: 0.95em;
+            display: none;  /* Hidden by default */
+        }
+        .log-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 20px;
+            padding: 10px;
+            background: rgba(0,0,0,0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .log-toggle:hover {
+            background: rgba(0,0,0,0.2);
+        }
+        .log-toggle .arrow {
+            transition: transform 0.3s;
+        }
+        .log-toggle.expanded .arrow {
+            transform: rotate(180deg);
+        }
+        body.night .log-toggle {
+            background: rgba(30,30,40,0.8);
+        }
+        body.night .log-toggle:hover {
+            background: rgba(40,40,50,0.9);
+        }
     </style>
 </head>
 <body>
@@ -262,7 +299,12 @@
         <div class="last-update" id="last-update">
             Last update: Never
         </div>
-        <div class="log-area" id="log-area" style="background:rgba(0,0,0,0.2);color:#fff;padding:10px 20px;margin-top:20px;border-radius:8px;max-height:180px;overflow-y:auto;font-size:0.95em;"></div>
+        
+        <div class="log-toggle" id="log-toggle">
+            <span>Event Log</span>
+            <span class="arrow">▼</span>
+        </div>
+        <div class="log-area" id="log-area"></div>
     </div>
     
     <script>
@@ -394,6 +436,10 @@
             const now = new Date();
             const entry = `<div>[${now.toLocaleTimeString()}] ${msg}</div>`;
             logArea.innerHTML = entry + logArea.innerHTML;
+            // Auto-scroll to top when new entries arrive if already at top
+            if (logArea.scrollTop < 10) {
+                logArea.scrollTop = 0;
+            }
         }
         let lastTimestamp = null;
         let flightsData = [];
@@ -600,6 +646,14 @@
             setNightMode(!nightMode);
             nightModeBtn.textContent = nightMode ? '☀️ Day Mode' : '🌙 Night Mode';
         };
+
+        // Log toggle functionality
+        const logToggle = document.getElementById('log-toggle');
+        const logArea = document.getElementById('log-area');
+        logToggle.onclick = function() {
+            logArea.style.display = logArea.style.display === 'none' ? 'block' : 'none';
+            logToggle.classList.toggle('expanded');
+        }
     </script>
 </body>
 </html> 

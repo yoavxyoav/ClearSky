@@ -15,6 +15,7 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 import sys
 import random
+from pathlib import Path
 
 # Position source mapping (OpenSky API)
 SOURCE_MAP = {0: 'ADS-B', 1: 'ASTERIX', 2: 'MLAT'}
@@ -91,8 +92,21 @@ def get_token():
     return _token
 
 def get_jordan_polygon():
-    """Get Jordan's boundary polygon from geoBoundaries"""
+    """Get Jordan's boundary polygon from local file or geoBoundaries"""
     try:
+        # Try local file first
+        local_file = Path("polygons/jor.geojson")
+        if local_file.exists():
+            with open(local_file, 'r') as f:
+                data = json.load(f)
+                if not data.get('features'):
+                    raise ValueError("No boundary data found in local Jordan file")
+                # Get the first feature's geometry
+                geometry = data['features'][0]['geometry']
+                return shape(geometry)
+        
+        # Fallback to URL if local file doesn't exist
+        print("Local polygon file not found, fetching from URL...")
         response = requests.get(JORDAN_GEOJSON_URL)
         response.raise_for_status()
         data = response.json()
