@@ -44,3 +44,6 @@ htmlcov/
 
 # Credentials
 credentials.json
+
+# Polygon files (too large for git)
+polygons/
