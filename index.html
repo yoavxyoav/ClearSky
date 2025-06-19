@@ -556,8 +556,8 @@
         // BBOX rectangle layer
         let bboxLayer = null;
         const bboxToggle = document.getElementById('bbox-toggle');
-        // Hardcoded BBOX (should match backend BBOX)
-        const BBOX = [34.8, 29.1, 39.3, 33.5]; // [minLon, minLat, maxLon, maxLat]
+        // BBOX with padding (matches backend BBOX exactly)
+        const BBOX = [33.958, 28.183, 40.302, 34.375]; // [minLon, minLat, maxLon, maxLat]
         function drawBBOX() {
             if (bboxLayer) map.removeLayer(bboxLayer);
             const bounds = [[BBOX[1], BBOX[0]], [BBOX[3], BBOX[2]]];

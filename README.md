@@ -105,5 +105,8 @@ The server provides several REST endpoints:
 - `map.png` — Screenshot for README
 
 
+![CLI Map Example](cli-map.png)
+CLI Map
+
 *Created for the one and only Ultimate Boss. All bugs are the user's fault.*
  
