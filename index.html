@@ -482,16 +482,21 @@
         });
         function updateData(force=false) {
             const backendStatus = document.getElementById('backend-status');
+            logEvent(`Refreshing flight data${force ? ' (forced)' : ''}...`);
             fetch('/api/flights')
                 .then(response => response.json())
                 .then(data => {
                     console.log('[DEBUG] /api/flights response:', data);
-                    if (!force && data.timestamp === lastTimestamp) return;
+                    if (!force && data.timestamp === lastTimestamp) {
+                        logEvent('No new data available (same timestamp)');
+                        return;
+                    }
                     lastTimestamp = data.timestamp;
                     flightsData = data.flights;
                     backendStatus.textContent = 'Connected to backend. Last update: ' + new Date(data.timestamp).toLocaleString();
                     document.getElementById('total-flights').textContent = data.stats.total_flights;
                     document.getElementById('jordan-flights').textContent = data.stats.jordan_flights;
+                    logEvent(`Updated with ${data.stats.total_flights} total flights (${data.stats.jordan_flights} over Jordan)`);
                     // Reset countdown when new data arrives
                     startCountdown();
                     flightMarkers.clearLayers();
@@ -540,6 +545,7 @@
                     console.error('Error fetching data:', error);
                     const backendStatus = document.getElementById('backend-status');
                     backendStatus.textContent = 'Error: Could not connect to backend or parse data.';
+                    logEvent(`Error refreshing data: ${error.message}`);
                     document.getElementById('flights-tbody').innerHTML = 
                         '<tr><td colspan="8" style="text-align: center; color: #ff6b6b;">Error loading data</td></tr>';
                 });
